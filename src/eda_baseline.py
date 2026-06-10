@@ -4,6 +4,7 @@ Baseline Exploratory Data Analysis for Lending Club Dataset
 - Provides statistical properties
 - Identifies missing values, cardinality, and data types
 - Recommends features to keep or remove
+- Includes visualizations for better understanding
 - Optimized for Intel Core i5 with chunked processing
 """
 
@@ -26,6 +27,10 @@ OUTPUT_DIR = r"D:\contrastive-credit-representations\eda_output"
 
 # Create output directory
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# Set visualization style
+plt.style.use('seaborn-v0_8-darkgrid')
+sns.set_palette("husl")
 
 # =============================================
 # Load Data
@@ -82,6 +87,20 @@ print(f"Categorical columns: {len(categorical_cols)}")
 print(f"Object columns: {len(object_cols)}")
 print(f"Datetime columns: {len(datetime_cols)}")
 
+# Visualization: Column types distribution
+fig, ax = plt.subplots(figsize=(10, 6))
+dtype_counts.plot(kind='bar', ax=ax, color='skyblue')
+ax.set_title('Column Types Distribution', fontsize=16)
+ax.set_xlabel('Data Type')
+ax.set_ylabel('Number of Columns')
+ax.tick_params(axis='x', rotation=45)
+for i, v in enumerate(dtype_counts):
+    ax.text(i, v + 0.5, str(v), ha='center', fontweight='bold')
+plt.tight_layout()
+plt.savefig(os.path.join(OUTPUT_DIR, 'column_types_distribution.png'), dpi=150)
+plt.close()
+print(f"✓ Saved: column_types_distribution.png")
+
 # =============================================
 # 3. Missing Values Analysis
 # =============================================
@@ -112,6 +131,34 @@ if len(high_missing) > 0:
 complete_cols = missing_df[missing_df['Missing %'] == 0]
 print(f"\nColumns with 0 missing values: {len(complete_cols)}")
 
+# Visualization: Missing values heatmap (top 50 columns)
+fig, ax = plt.subplots(figsize=(12, 10))
+top_missing = missing_df.head(50)
+missing_matrix = df[top_missing['Column']].isna()
+sns.heatmap(missing_matrix.T, cbar=True, ax=ax, cmap='viridis')
+ax.set_title('Missing Values Heatmap (Top 50 Columns)', fontsize=16)
+ax.set_xlabel('Rows (sample)')
+ax.set_ylabel('Columns')
+ax.tick_params(axis='x', labelsize=8)
+plt.tight_layout()
+plt.savefig(os.path.join(OUTPUT_DIR, 'missing_values_heatmap.png'), dpi=150)
+plt.close()
+print(f"✓ Saved: missing_values_heatmap.png")
+
+# Visualization: Missing percentage bar chart
+fig, ax = plt.subplots(figsize=(12, 8))
+top_30_missing = missing_df.head(30)
+ax.barh(range(len(top_30_missing)), top_30_missing['Missing %'], color='coral')
+ax.set_yticks(range(len(top_30_missing)))
+ax.set_yticklabels(top_30_missing['Column'], fontsize=8)
+ax.set_xlabel('Missing Percentage (%)')
+ax.set_title('Top 30 Columns by Missing Percentage', fontsize=16)
+ax.invert_yaxis()
+plt.tight_layout()
+plt.savefig(os.path.join(OUTPUT_DIR, 'missing_percentage_bar.png'), dpi=150)
+plt.close()
+print(f"✓ Saved: missing_percentage_bar.png")
+
 # =============================================
 # 4. Cardinality Analysis (Unique Values)
 # =============================================
@@ -137,6 +184,21 @@ low_cardinality = cardinality[cardinality['Unique Values'] <= 10]
 print(f"\nLow cardinality columns (≤10 unique values): {len(low_cardinality)}")
 print(low_cardinality[['Column', 'Unique Values', 'Dtype']].to_string(index=False))
 
+# Visualization: Cardinality distribution
+fig, ax = plt.subplots(figsize=(12, 8))
+unique_counts = cardinality['Unique Values']
+unique_counts = unique_counts[unique_counts < 10000]  # Filter outliers for better visualization
+ax.hist(unique_counts, bins=50, color='teal', edgecolor='black')
+ax.set_title('Cardinality Distribution (Unique Values per Column)', fontsize=16)
+ax.set_xlabel('Number of Unique Values')
+ax.set_ylabel('Number of Columns')
+ax.axvline(x=1000, color='red', linestyle='--', label='High Cardinality Threshold (1000)')
+ax.legend()
+plt.tight_layout()
+plt.savefig(os.path.join(OUTPUT_DIR, 'cardinality_distribution.png'), dpi=150)
+plt.close()
+print(f"✓ Saved: cardinality_distribution.png")
+
 # =============================================
 # 5. Basic Statistics for Numeric Columns
 # =============================================
@@ -161,32 +223,28 @@ print(f"\nConstant numeric columns (all same value): {len(constant_cols)}")
 if constant_cols:
     print(f"  {constant_cols}")
 
-# =============================================
-# 6. Categorical Columns Analysis
-# =============================================
-
-print("\n" + "="*80)
-print("6. CATEGORICAL COLUMNS ANALYSIS")
-print("="*80)
-
-cat_stats = pd.DataFrame({
-    'Column': categorical_cols,
-    'Unique Values': [df[col].nunique() for col in categorical_cols],
-    'Most Common': [df[col].mode().iloc[0] if not df[col].mode().empty else 'N/A' for col in categorical_cols],
-    'Most Common Count': [df[col].value_counts().iloc[0] if not df[col].value_counts().empty else 0 for col in categorical_cols],
-    'Most Common %': [df[col].value_counts().iloc[0] / len(df) * 100 if not df[col].value_counts().empty else 0 for col in categorical_cols]
-})
-cat_stats = cat_stats.sort_values('Unique Values', ascending=False)
-
-print("\nCategorical columns summary:")
-print(cat_stats.to_string(index=False))
+# Visualization: Correlation matrix (top numeric columns)
+if len(numeric_cols) > 0:
+    # Select top numeric columns by variance (to avoid memory issues)
+    top_numeric = numeric_cols[:20] if len(numeric_cols) > 20 else numeric_cols
+    numeric_df = df[top_numeric].select_dtypes(include=[np.number])
+    
+    if len(numeric_df.columns) > 1:
+        fig, ax = plt.subplots(figsize=(14, 12))
+        corr_matrix = numeric_df.corr()
+        sns.heatmap(corr_matrix, annot=True, fmt='.2f', cmap='coolwarm', ax=ax, square=True)
+        ax.set_title('Correlation Matrix (Top Numeric Columns)', fontsize=16)
+        plt.tight_layout()
+        plt.savefig(os.path.join(OUTPUT_DIR, 'correlation_matrix.png'), dpi=150)
+        plt.close()
+        print(f"✓ Saved: correlation_matrix.png")
 
 # =============================================
-# 7. Target Variable Analysis (Default Rate)
+# 6. Target Variable Analysis (Default Rate)
 # =============================================
 
 print("\n" + "="*80)
-print("7. TARGET VARIABLE ANALYSIS (DEFAULT RATE)")
+print("6. TARGET VARIABLE ANALYSIS (DEFAULT RATE)")
 print("="*80)
 
 # Check loan_status column
@@ -203,6 +261,65 @@ if 'loan_status' in df.columns:
     print(f"\nDefault rate (based on loan_status):")
     print(f"  Defaults: {default_mask.sum():,} ({default_mask.sum()/len(df)*100:.2f}%)")
     print(f"  Non-defaults: {(~default_mask).sum():,} ({(~default_mask).sum()/len(df)*100:.2f}%)")
+    
+    # Visualization: Loan status distribution
+    fig, ax = plt.subplots(figsize=(12, 6))
+    status_counts.plot(kind='bar', ax=ax, color='steelblue')
+    ax.set_title('Loan Status Distribution', fontsize=16)
+    ax.set_xlabel('Loan Status')
+    ax.set_ylabel('Number of Loans')
+    ax.tick_params(axis='x', rotation=45)
+    for i, v in enumerate(status_counts):
+        ax.text(i, v + 1000, f'{v:,}', ha='center', fontsize=9)
+    plt.tight_layout()
+    plt.savefig(os.path.join(OUTPUT_DIR, 'loan_status_distribution.png'), dpi=150)
+    plt.close()
+    print(f"✓ Saved: loan_status_distribution.png")
+    
+    # Visualization: Default vs Non-Default pie chart
+    fig, ax = plt.subplots(figsize=(8, 8))
+    default_counts = [default_mask.sum(), (~default_mask).sum()]
+    labels = ['Default', 'Non-Default']
+    colors = ['#ff6b6b', '#51cf66']
+    ax.pie(default_counts, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90)
+    ax.set_title('Default vs Non-Default Distribution', fontsize=16)
+    plt.tight_layout()
+    plt.savefig(os.path.join(OUTPUT_DIR, 'default_distribution.png'), dpi=150)
+    plt.close()
+    print(f"✓ Saved: default_distribution.png")
+
+# =============================================
+# 7. Key Numeric Features Distribution
+# =============================================
+
+print("\n" + "="*80)
+print("7. KEY NUMERIC FEATURES DISTRIBUTION")
+print("="*80)
+
+# Select key numeric features for visualization
+key_numeric_features = ['loan_amnt', 'annual_inc', 'dti', 'int_rate', 'fico_range_low']
+
+fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+axes = axes.flatten()
+
+for i, col in enumerate(key_numeric_features):
+    if col in df.columns:
+        df[col].dropna().hist(ax=axes[i], bins=50, color='purple', edgecolor='black')
+        axes[i].set_title(f'{col} Distribution', fontsize=14)
+        axes[i].set_xlabel(col)
+        axes[i].set_ylabel('Frequency')
+        axes[i].axvline(df[col].mean(), color='red', linestyle='--', label=f'Mean: {df[col].mean():.2f}')
+        axes[i].axvline(df[col].median(), color='green', linestyle='--', label=f'Median: {df[col].median():.2f}')
+        axes[i].legend()
+
+# Hide empty subplot
+if len(key_numeric_features) < len(axes):
+    axes[-1].set_visible(False)
+
+plt.tight_layout()
+plt.savefig(os.path.join(OUTPUT_DIR, 'key_numeric_distributions.png'), dpi=150)
+plt.close()
+print(f"✓ Saved: key_numeric_distributions.png")
 
 # =============================================
 # 8. Feature Recommendations
@@ -245,7 +362,7 @@ for col in df.columns:
 # Print recommendations
 print("\n🔴 RECOMMENDED TO REMOVE:")
 if remove_recommendations:
-    for rec in remove_recommendations[:20]:  # Show first 20
+    for rec in remove_recommendations[:20]:
         print(f"  • {rec}")
     if len(remove_recommendations) > 20:
         print(f"  ... and {len(remove_recommendations) - 20} more")
@@ -290,7 +407,7 @@ if len(additional_features) > 10:
     print(f"  ... and {len(additional_features) - 10} more")
 
 # =============================================
-# 9. Save EDA Report to File
+# 9. Save EDA Report and Visualizations
 # =============================================
 
 print("\n" + "="*80)
@@ -317,12 +434,26 @@ with open(report_path, 'w', encoding='utf-8') as f:
     f.write(f"  Columns with >50% missing: {len(high_missing)}\n")
     f.write(f"  Columns with 0 missing: {len(complete_cols)}\n\n")
     
+    f.write("CARDINALITY:\n")
+    f.write(f"  High cardinality columns (>1000): {len(high_cardinality)}\n")
+    f.write(f"  Low cardinality columns (≤10): {len(low_cardinality)}\n\n")
+    
+    f.write("TARGET VARIABLE:\n")
+    if 'loan_status' in df.columns:
+        f.write(f"  Default rate: {default_mask.sum()/len(df)*100:.2f}%\n")
+        f.write(f"  Defaults: {default_mask.sum():,}\n")
+        f.write(f"  Non-defaults: {(~default_mask).sum():,}\n\n")
+    
     f.write("RECOMMENDED TO REMOVE:\n")
     for rec in remove_recommendations:
         f.write(f"  • {rec}\n")
     
     f.write("\nRECOMMENDED TO KEEP:\n")
     for col in existing_core:
+        f.write(f"  • {col}\n")
+    
+    f.write("\nADDITIONAL FEATURES TO EXPLORE:\n")
+    for col in additional_features[:20]:
         f.write(f"  • {col}\n")
 
 print(f"EDA report saved to: {report_path}")
@@ -342,6 +473,23 @@ print(f"  Core features to keep: {len(existing_core)}")
 print(f"  Additional features to explore: {len(additional_features)}")
 print(f"  Report saved to: {report_path}")
 print(f"  Output directory: {OUTPUT_DIR}")
+
+# List all saved visualizations
+print("\n📊 Generated Visualizations:")
+visualizations = [
+    'column_types_distribution.png',
+    'missing_values_heatmap.png',
+    'missing_percentage_bar.png',
+    'cardinality_distribution.png',
+    'correlation_matrix.png',
+    'loan_status_distribution.png',
+    'default_distribution.png',
+    'key_numeric_distributions.png'
+]
+for viz in visualizations:
+    viz_path = os.path.join(OUTPUT_DIR, viz)
+    if os.path.exists(viz_path):
+        print(f"  • {viz}")
 
 print("\nNext steps:")
 print("  1. Remove identified redundant features")
