@@ -4,6 +4,7 @@ Optimized CSV to Parquet converter for Intel Core i5 laptops
 - Memory-efficient data types (float32, int32, category)
 - Handles Lending Club footer rows with summary statistics
 - Handles date columns properly
+- Uses inspection results to handle all columns correctly
 """
 
 import pandas as pd
@@ -69,7 +70,7 @@ def optimize_dtypes(df):
 def clean_chunk(chunk):
     """Remove footer rows and handle date columns"""
     
-    # Check if 'id' column exists
+    # Check if 'id' column exists (for accepted loans)
     if 'id' in chunk.columns:
         # Convert id to string
         chunk['id'] = chunk['id'].astype(str)
@@ -78,21 +79,54 @@ def clean_chunk(chunk):
         # This removes footer rows like "Total amount funded..."
         chunk = chunk[chunk['id'].str.match(r'^\d+$', na=False)]
     
+    # Check for 'Amount Requested' column (for rejected loans)
+    if 'Amount Requested' in chunk.columns:
+        # Remove rows where Amount Requested contains text
+        chunk = chunk[pd.to_numeric(chunk['Amount Requested'], errors='coerce').notna()]
+    
     # Also check for other columns that might have footer data
     if 'loan_amnt' in chunk.columns:
         # Remove rows where loan_amnt contains text
         chunk = chunk[pd.to_numeric(chunk['loan_amnt'], errors='coerce').notna()]
     
-    # Handle date columns - convert to datetime objects
-    date_columns = ['earliest_cr_line', 'sec_app_earliest_cr_line', 'issue_d', 'last_pymnt_d', 
-                    'last_credit_pull_d', 'next_pymnt_d', 'mths_since_last_delinq']
+    # Handle date columns for accepted loans
+    date_columns_accepted = ['earliest_cr_line', 'sec_app_earliest_cr_line', 'issue_d', 'last_pymnt_d', 
+                             'last_credit_pull_d', 'next_pymnt_d', 'mths_since_last_delinq',
+                             'hardship_start_date', 'hardship_end_date', 'payment_plan_start_date',
+                             'debt_settlement_flag_date', 'settlement_date']
     
-    for col in date_columns:
+    for col in date_columns_accepted:
         if col in chunk.columns:
-            # Convert to datetime, coerce errors to NaT
-            chunk[col] = pd.to_datetime(chunk[col], errors='coerce', format='%b-%Y')
-            # Then convert to string representation that fastparquet can handle
-            chunk[col] = chunk[col].dt.strftime('%Y-%m-%d') if chunk[col].notna().any() else chunk[col]
+            # Try multiple date formats
+            try:
+                chunk[col] = pd.to_datetime(chunk[col], errors='coerce', format='%b-%Y')
+            except:
+                try:
+                    chunk[col] = pd.to_datetime(chunk[col], errors='coerce')
+                except:
+                    chunk[col] = pd.NaT
+            
+            # Convert to string representation that fastparquet can handle
+            if chunk[col].notna().any():
+                chunk[col] = chunk[col].dt.strftime('%Y-%m-%d')
+            else:
+                chunk[col] = None
+    
+    # Handle date columns for rejected loans
+    date_columns_rejected = ['Application Date']
+    
+    for col in date_columns_rejected:
+        if col in chunk.columns:
+            try:
+                chunk[col] = pd.to_datetime(chunk[col], errors='coerce')
+            except:
+                chunk[col] = pd.NaT
+            
+            # Convert to string representation
+            if chunk[col].notna().any():
+                chunk[col] = chunk[col].dt.strftime('%Y-%m-%d')
+            else:
+                chunk[col] = None
     
     return chunk
 

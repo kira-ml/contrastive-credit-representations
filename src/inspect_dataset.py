@@ -72,7 +72,14 @@ def inspect_large_csv(csv_path, sample_size=10000, chunk_size=50000):
             break
     
     # Combine samples
-    sample_df = pd.concat(sample_rows, ignore_index=True).sample(n=min(sample_size, len(sample_df)) if len(sample_df) > sample_size else sample_df)
+    if sample_rows:
+        sample_df = pd.concat(sample_rows, ignore_index=True)
+        # Ensure we don't exceed sample_size
+        if len(sample_df) > sample_size:
+            sample_df = sample_df.sample(n=sample_size)
+    else:
+        sample_df = pd.DataFrame(columns=columns)
+        print("Warning: No sample rows collected")
     
     # 5. Display basic statistics
     print(f"\n--- BASIC STATISTICS ---")
@@ -86,16 +93,17 @@ def inspect_large_csv(csv_path, sample_size=10000, chunk_size=50000):
     # 7. Show data types (first 20 columns)
     print(f"\n--- DATA TYPES (First 20 columns) ---")
     for col in columns[:20]:
-        dtype = sample_df[col].dtype
-        null_count = sample_df[col].isna().sum()
-        unique_count = sample_df[col].nunique()
-        print(f"  {col}: {dtype} | Nulls: {null_count}/{len(sample_df)} | Unique: {unique_count}")
+        if col in sample_df.columns:
+            dtype = sample_df[col].dtype
+            null_count = sample_df[col].isna().sum()
+            unique_count = sample_df[col].nunique()
+            print(f"  {col}: {dtype} | Nulls: {null_count}/{len(sample_df)} | Unique: {unique_count}")
     
     # 8. Detect date columns
     print(f"\n--- DATE COLUMNS DETECTION ---")
     date_cols = []
     for col in columns:
-        if sample_df[col].dtype == 'object':
+        if col in sample_df.columns and sample_df[col].dtype == 'object':
             sample_vals = sample_df[col].dropna().head(5)
             for val in sample_vals:
                 if isinstance(val, str):
@@ -107,7 +115,7 @@ def inspect_large_csv(csv_path, sample_size=10000, chunk_size=50000):
     # 9. Show sample values for object columns
     print(f"\n--- SAMPLE VALUES FOR OBJECT COLUMNS ---")
     for col in columns:
-        if sample_df[col].dtype == 'object':
+        if col in sample_df.columns and sample_df[col].dtype == 'object':
             sample_vals = sample_df[col].dropna().head(3).tolist()
             print(f"  {col}: {sample_vals}")
     
@@ -116,9 +124,9 @@ def inspect_large_csv(csv_path, sample_size=10000, chunk_size=50000):
     # Read last 10 rows of the file
     with open(csv_path, 'rb') as f:
         f.seek(0, 2)  # Go to end
-        file_size = f.tell()
+        file_size_bytes = f.tell()
         # Read last ~10KB
-        f.seek(max(0, file_size - 10000))
+        f.seek(max(0, file_size_bytes - 10000))
         last_lines = f.read().decode('utf-8', errors='ignore').splitlines()
         last_10 = last_lines[-10:] if len(last_lines) >= 10 else last_lines
     print(f"Last 10 rows of file:")
