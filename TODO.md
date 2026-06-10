@@ -1,6 +1,3 @@
-Here's your **TODO.md** to pick up right where you left off tomorrow:
-
-```markdown
 # TODO.md — Lending Club SSL Project
 
 ## 📍 Current Status: Baseline Feature Preprocessing Complete
