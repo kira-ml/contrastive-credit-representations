@@ -1,0 +1,259 @@
+# =============================================
+# Python
+# =============================================
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+env/
+.venv/
+.env/
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.lock
+
+# pdm
+.pdm.toml
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# =============================================
+# Data files (DO NOT COMMIT RAW DATA)
+# =============================================
+
+# Raw data
+data/raw/
+*.csv
+*.xlsx
+*.xls
+*.parquet
+*.feather
+*.json
+*.jsonl
+*.pickle
+*.pkl
+
+# Processed data (keep these local only)
+data/processed/
+data/interim/
+
+# Lending Club specific
+loan.csv
+Loan_*.csv
+*.zip
+*.tar.gz
+
+# =============================================
+# Model outputs and artifacts
+# =============================================
+
+# Trained models
+*.pt
+*.pth
+*.bin
+*.joblib
+*.pkl
+*.onnx
+*.h5
+*.hdf5
+
+# Model checkpoints
+checkpoints/
+*.ckpt
+*.checkpoint
+
+# TensorFlow
+*.pb
+*.index
+*.data-00000-of-00001
+
+# =============================================
+# Experiment results and logs
+# =============================================
+
+# Output directories
+results/
+outputs/
+logs/
+runs/
+experiments/
+*.log
+*.txt
+
+# Metrics and plots
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.pdf
+*.eps
+*.psd
+
+# Embedding outputs
+*.npy
+*.npz
+*.csv
+*.xlsx
+*.json
+
+# =============================================
+# IDE and editor files
+# =============================================
+
+# VS Code
+.vscode/
+*.code-workspace
+.vscode/settings.json
+.vscode/launch.json
+
+# PyCharm
+.idea/
+*.iml
+out/
+.idea/workspace.xml
+
+# Vim
+*.swp
+*.swo
+*~
+*.un~
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# =============================================
+# OS generated files
+# =============================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+*.dmg
+*.so
+*.dylib
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+*.lock
+fuse-hiden*
+.directory
+
+# =============================================
+# Project-specific exclusions
+# =============================================
+
+# Notebook checkpoints (exclude these from git)
+*.ipynb_checkpoint
+
+# Temp files
+tmp/
+temp/
+*.tmp
+
+# Secrets and configuration (DO NOT COMMIT)
+.env
+config/local.yaml
+*.key
+*.pem
+
+# =============================================
+# Keep only essential project files
+# =============================================
+
+# Keep these files (but they're already excluded above by type)
+# We'll explicitly include them if needed via .gitignore rules
+
+# Exclude all experiment outputs, but keep the directory structure
+!results/.gitkeep
+!outputs/.gitkeep
+!logs/.gitkeep
+
+# =============================================
+# Optional: Exclude large directories
+# =============================================
+
+# Docker
+.dockerignore
+*.tar
+
+# Development helpers
+.pytest_cache/
+.mypy_cache/
+.pyre/
