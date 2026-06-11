@@ -30,13 +30,13 @@ class SSLConfig:
     """Configuration for SSL pretraining"""
     # Data
     data_path: str = "D:/contrastive-credit-representations/data/processed/baseline_features_v2.npz"
-    n_samples: int = 10000  # Use subset for pretraining
+    n_samples: int = 50000  # Use subset for pretraining
     batch_size: int = 256
     
     # Model architecture
     input_dim: int = 18  # Will be auto-detected
-    hidden_dim: int = 128
-    embedding_dim: int = 64
+    hidden_dim: int = 256
+    embedding_dim: int = 128
     projection_dim: int = 64  # For contrastive head
     
     # Training hyperparameters
@@ -398,9 +398,9 @@ class SSLTrainer:
             
             # Apply augmentations
             augment = TabularAugmentation(
-                noise_std=0.05,  # Reduced from 0.1
-                mask_prob=0.1,   # Reduced from 0.2
-                feature_dropout=0.05  # Reduced from 0.1
+                noise_std=0.1,   # Increased from 0.05
+                mask_prob=0.2,   # Increased from 0.1
+                feature_dropout=0.1   # Increased from 0.05
             )
             x1, x2 = augment(batch)
             
