@@ -30,8 +30,8 @@ class SSLConfig:
     """Configuration for SSL pretraining"""
     # Data
     data_path: str = "D:/contrastive-credit-representations/data/processed/baseline_features_v2.npz"
-    n_samples: int = 50000  # Use subset for pretraining
-    batch_size: int = 256
+    n_samples: int = 200000  # Use subset for pretraining
+    batch_size: int = 512
     
     # Model architecture
     input_dim: int = 18  # Will be auto-detected
@@ -43,7 +43,7 @@ class SSLConfig:
     temperature: float = 0.1
     learning_rate: float = 1e-3
     weight_decay: float = 1e-5
-    epochs: int = 10
+    epochs: int = 20
     warmup_epochs: int = 2
     
     # Augmentation

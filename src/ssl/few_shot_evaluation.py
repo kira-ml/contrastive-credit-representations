@@ -31,6 +31,7 @@ BATCH_SIZE = 256
 FEW_SHOT_SIZES = [20, 50, 100, 200]
 N_SEEDS = 5
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+EMBEDDING_DIM = 128  # Must match the encoder's embedding dimension
 
 # =============================================
 # Data Loading
@@ -60,8 +61,8 @@ def load_data(data_path: str, n_samples: int = None) -> tuple:
 
 class MLPEncoder(nn.Module):
     """MLP encoder matching pretraining architecture"""
-    def __init__(self, input_dim: int, hidden_dim: int = 128, 
-                 embedding_dim: int = 64, dropout: float = 0.1):
+    def __init__(self, input_dim: int, hidden_dim: int = 256, 
+             embedding_dim: int = 128, dropout: float = 0.1):
         super().__init__()
         self.encoder = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
@@ -100,6 +101,25 @@ class SSLFeatureExtractor:
         with torch.no_grad():
             embeddings = self.encoder(X_tensor).cpu().numpy()
         return embeddings
+
+# =============================================
+# MLP Probe (Non-linear classifier on frozen embeddings)
+# =============================================
+
+class MLPProbe(nn.Module):
+    """Non-linear probe for SSL embeddings"""
+    def __init__(self, input_dim: int, hidden_dim: int = 64, dropout: float = 0.1):
+        super().__init__()
+        self.classifier = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, 1)
+        )
+    
+    def forward(self, x):
+        logits = self.classifier(x)
+        return logits.squeeze()
 
 # =============================================
 # Few-Shot Evaluation
@@ -147,26 +167,55 @@ def evaluate_few_shot(X: np.ndarray, y: np.ndarray, n_samples: int, seed: int) -
     
     results = {}
     
-    # ===== 1. SSL Probe (Linear classifier on frozen embeddings) =====
+    # ===== 1. SSL Linear Probe (frozen embeddings + linear classifier) =====
     # Extract embeddings
     extractor = SSLFeatureExtractor(ENCODER_PATH, input_dim=X.shape[1])
     X_train_ssl = extractor.extract(X_train)
     X_test_ssl = extractor.extract(X_test)
     
-    # Train linear classifier on embeddings
+    # Train linear probe
     ssl_probe = LogisticRegression(
         C=1.0, 
         max_iter=1000, 
         random_state=seed,
-        class_weight='balanced'  # Handle class imbalance
+        class_weight='balanced'
     )
     ssl_probe.fit(X_train_ssl, y_train)
     y_pred_ssl = ssl_probe.predict_proba(X_test_ssl)[:, 1]
     
-    results['ssl_auc'] = roc_auc_score(y_test, y_pred_ssl)
-    results['ssl_f1'] = f1_score(y_test, ssl_probe.predict(X_test_ssl))
+    results['ssl_linear_auc'] = roc_auc_score(y_test, y_pred_ssl)
+    results['ssl_linear_f1'] = f1_score(y_test, ssl_probe.predict(X_test_ssl))
+
+    # ===== 2. SSL MLP Probe (frozen embeddings + non-linear classifier) =====
+    # Convert to torch tensors
+    X_train_torch = torch.FloatTensor(X_train_ssl)
+    y_train_torch = torch.FloatTensor(y_train)
+    X_test_torch = torch.FloatTensor(X_test_ssl)
+    y_test_torch = torch.FloatTensor(y_test)
     
-    # ===== 2. Logistic Regression Baseline (on raw features) =====
+    # Initialize MLP probe
+    mlp_probe = MLPProbe(input_dim=EMBEDDING_DIM, hidden_dim=64).to(DEVICE)
+    optimizer = optim.Adam(mlp_probe.parameters(), lr=1e-3)
+    criterion = nn.BCEWithLogitsLoss()
+    
+    # Train MLP probe (200 epochs)
+    for epoch in range(200):
+        optimizer.zero_grad()
+        logits = mlp_probe(X_train_torch)
+        loss = criterion(logits, y_train_torch)
+        loss.backward()
+        optimizer.step()
+    
+    # Evaluate MLP probe
+    mlp_probe.eval()
+    with torch.no_grad():
+        logits = mlp_probe(X_test_torch)
+        y_pred_mlp = torch.sigmoid(logits).cpu().numpy()
+    
+    results['ssl_mlp_auc'] = roc_auc_score(y_test, y_pred_mlp)
+    results['ssl_mlp_f1'] = f1_score(y_test, (y_pred_mlp > 0.5).astype(int))
+
+    # ===== 3. Logistic Regression Baseline (on raw features) =====
     lr_baseline = LogisticRegression(
         C=1.0, 
         max_iter=1000, 
@@ -179,8 +228,9 @@ def evaluate_few_shot(X: np.ndarray, y: np.ndarray, n_samples: int, seed: int) -
     results['lr_auc'] = roc_auc_score(y_test, y_pred_lr)
     results['lr_f1'] = f1_score(y_test, lr_baseline.predict(X_test))
     
-    # ===== 3. Compute SSL improvement =====
-    results['ssl_improvement'] = results['ssl_auc'] - results['lr_auc']
+    # ===== 4. Compute SSL improvement =====
+    results['ssl_linear_improvement'] = results['ssl_linear_auc'] - results['lr_auc']
+    results['ssl_mlp_improvement'] = results['ssl_mlp_auc'] - results['lr_auc']
     
     # Metadata
     results['n_samples'] = n_samples
@@ -228,15 +278,19 @@ def run_few_shot_evaluation():
                 continue
             
             all_results.append(results)
-            print(f"  Seed {seed}: SSL AUC = {results['ssl_auc']:.4f}, LR AUC = {results['lr_auc']:.4f}")
+            print(f"  Seed {seed}: SSL Linear AUC = {results['ssl_linear_auc']:.4f}, "
+                  f"SSL MLP AUC = {results['ssl_mlp_auc']:.4f}, "
+                  f"LR AUC = {results['lr_auc']:.4f}")
         
         # Print summary for this sample size
         df_n = pd.DataFrame([r for r in all_results if r['n_samples'] == n])
         if len(df_n) > 0:
             print(f"\n  Summary for n={n}:")
-            print(f"    SSL AUC: {df_n['ssl_auc'].mean():.4f} ± {df_n['ssl_auc'].std():.4f}")
-            print(f"    LR AUC:  {df_n['lr_auc'].mean():.4f} ± {df_n['lr_auc'].std():.4f}")
-            print(f"    SSL Improvement: {df_n['ssl_improvement'].mean():.4f} ± {df_n['ssl_improvement'].std():.4f}")
+            print(f"    SSL Linear AUC: {df_n['ssl_linear_auc'].mean():.4f} ± {df_n['ssl_linear_auc'].std():.4f}")
+            print(f"    SSL MLP AUC:    {df_n['ssl_mlp_auc'].mean():.4f} ± {df_n['ssl_mlp_auc'].std():.4f}")
+            print(f"    LR AUC:         {df_n['lr_auc'].mean():.4f} ± {df_n['lr_auc'].std():.4f}")
+            print(f"    SSL Linear Improvement: {df_n['ssl_linear_improvement'].mean():.4f} ± {df_n['ssl_linear_improvement'].std():.4f}")
+            print(f"    SSL MLP Improvement:    {df_n['ssl_mlp_improvement'].mean():.4f} ± {df_n['ssl_mlp_improvement'].std():.4f}")
     
     # Save results
     if all_results:
@@ -255,13 +309,16 @@ def run_few_shot_evaluation():
         print("FINAL SUMMARY TABLE")
         print("="*60)
         
-        summary = results_df.groupby('n_samples')[['ssl_auc', 'lr_auc', 'ssl_improvement']].agg(['mean', 'std'])
+        summary = results_df.groupby('n_samples')[['ssl_linear_auc', 'ssl_mlp_auc', 'lr_auc']].agg(['mean', 'std'])
         print(summary)
         
         # Print best improvement
-        best_n = results_df.groupby('n_samples')['ssl_improvement'].mean().idxmax()
-        best_imp = results_df.groupby('n_samples')['ssl_improvement'].mean().max()
-        print(f"\nBest SSL improvement at n={best_n}: +{best_imp:.4f} AUC")
+        best_linear_n = results_df.groupby('n_samples')['ssl_linear_improvement'].mean().idxmax()
+        best_linear_imp = results_df.groupby('n_samples')['ssl_linear_improvement'].mean().max()
+        best_mlp_n = results_df.groupby('n_samples')['ssl_mlp_improvement'].mean().idxmax()
+        best_mlp_imp = results_df.groupby('n_samples')['ssl_mlp_improvement'].mean().max()
+        print(f"\nBest SSL Linear improvement at n={best_linear_n}: +{best_linear_imp:.4f} AUC")
+        print(f"Best SSL MLP improvement at n={best_mlp_n}: +{best_mlp_imp:.4f} AUC")
         
     else:
         print("\n❌ No results generated. Check data and encoder.")
