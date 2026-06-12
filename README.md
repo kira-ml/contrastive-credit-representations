@@ -22,27 +22,80 @@ This project investigates whether self-supervised contrastive learning can extra
 contrastive-borrower-representations/
 ├── README.md                      # Project overview and documentation
 ├── data/
-│   ├── download_data.py           # Script to download Lending Club data
-│   └── preprocess.py              # Data cleaning and feature engineering
-├── models/
-│   ├── encoder.py                 # MLP encoder architecture
-│   ├── contrastive_pretraining.py # SimCLR-style contrastive learning
-│   └── downstream_classifier.py   # Linear probe and fine-tuning
-├── baselines/
-│   ├── logistic_regression.py     # Baseline 1
-│   ├── gradient_boosted_trees.py  # Baseline 2
-│   └── pca_supervised.py          # Baseline 3
-├── evaluation/
-│   ├── few_shot_experiment.py     # Few-shot evaluation framework
-│   ├── metrics.py                 # AUC, F1, learning curves
-│   └── visualize.py               # t-SNE/UMAP embeddings
-├── experiments/
-│   └── run_all_experiments.py     # Main experiment runner
-├── notebooks/
-│   └── exploratory_analysis.ipynb # Initial data exploration
-├── results/
-│   └── (experiment outputs)
-└── requirements.txt
+│   ├── processed/                 # Processed feature sets (Parquet format)
+│   │   ├── advanced_plan1.parquet
+│   │   ├── advanced_plan1.meta.json
+│   │   ├── baseline_plan1.parquet
+│   │   ├── baseline_plan1.meta.json
+│   │   ├── baseline_plan2.parquet
+│   │   ├── baseline_plan2.meta.json
+│   │   └── feature_engineering.log
+│   └── raw/                       # Raw Lending Club data
+│       ├── accepted_2007_to_2018Q4.parquet
+│       └── rejected_2007_to_2018Q4.parquet
+├── docs/
+│   └── experiment_results.md      # Detailed experiment documentation
+├── eda_output/                    # EDA visualizations and reports
+│   ├── cardinality_distribution.png
+│   ├── column_types_distribution.png
+│   ├── correlation_matrix.png
+│   ├── default_distribution.png
+│   ├── eda_report.txt
+│   ├── key_numeric_distributions.png
+│   ├── loan_status_distribution.png
+│   ├── missing_percentage_bar.png
+│   └── missing_values_heatmap.png
+├── logs/
+│   └── ssl/                       # Training logs
+│       └── pretraining.log
+├── models/                        # Saved model checkpoints
+│   ├── ssl_encoder.pt
+│   ├── ssl_encoder_epoch5.pt
+│   ├── ssl_encoder_epoch10.pt
+│   ├── ssl_encoder_epoch15.pt
+│   ├── ssl_encoder_epoch20.pt
+│   └── ssl_encoder_final.pt
+├── results/                       # Experiment results
+│   ├── baselines/                 # Baseline model comparisons
+│   │   ├── baseline_comparison_results.csv
+│   │   ├── baseline_results.csv
+│   │   ├── best_feature_set.txt
+│   │   └── temp_*.csv
+│   ├── ssl/                       # SSL evaluation results
+│   │   └── ssl_results.csv
+│   └── visualizations/            # Embedding visualizations
+│       ├── cluster_risk_profile.pdf
+│       ├── cluster_risk_profile.png
+│       ├── embeddings_tsne.pdf
+│       ├── embeddings_tsne.png
+│       ├── embeddings_umap.pdf
+│       ├── embeddings_umap.png
+│       ├── feature_correlation.pdf
+│       ├── feature_correlation.png
+│       ├── risk_score_distribution.pdf
+│       ├── risk_score_distribution.png
+│       ├── silhouette_analysis.pdf
+│       └── silhouette_analysis.png
+├── src/                           # Source code
+│   ├── baseline_features.py       # Feature preprocessing
+│   ├── data_ingest.py             # Data ingestion
+│   ├── eda_baseline.py            # EDA scripts
+│   ├── inspect_dataset.py         # Dataset inspection
+│   ├── run_baselines.py           # Baseline model comparison runner
+│   ├── features/                  # Feature engineering
+│   │   ├── feature_engineering_advanced.py
+│   │   └── feature_engineering_baseline.py
+│   ├── ssl/                       # SSL implementation
+│   │   ├── contrastive_pretraining.py
+│   │   ├── diagnose_embeddings.py
+│   │   ├── few_shot_evaluation.py
+│   │   ├── augmentations/         # Augmentation strategies
+│   │   │   └── scarf.py
+│   │   └── losses/                # Loss functions
+│   │       └── vicreg.py
+│   └── visualizations/            # Visualization scripts
+│       └── embedding_visualizations.py
+└── requirements.txt               # Python dependencies
 ```
 
 ---
@@ -77,18 +130,6 @@ The key insight: while default labels are scarce, loan application data is abund
 
 **Null Hypothesis:** Contrastive pretraining provides no benefit beyond what supervised models can learn from the same limited labeled data.
 
-### What Should the Model Learn?
-
-If the hypothesis holds, the encoder should capture:
-- **Credit profile similarity:** Applicants with similar credit histories should be close in embedding space
-- **Risk-compensating relationships:** Strong income partially compensating for thin credit files
-- **Interaction geometry:** High loan amount + low income creating distinct risk regions
-
-### What Should the Model NOT Learn?
-- Trivial input reconstruction
-- Clustering by non-risk attributes (geography, loan purpose without risk differentiation)
-- Historical approval propensity rather than fundamental risk
-
 ---
 
 ## Data
@@ -98,10 +139,10 @@ If the hypothesis holds, the encoder should capture:
 
 ### Dataset Construction
 - **Temporal scope:** Loans issued 2012-2018 (ensures outcome maturity)
-- **Size:** ~50,000 loans for SSL pretraining, separate temporal holdout for evaluation
+- **Size:** 2.26 million rows raw, subset to 200,000 for SSL pretraining
 - **Filtering:** Remove loans with <12 months payment history, missing interest rate, or loan amount >$40,000
 
-### Temporal Split (Critical for Realistic Evaluation)
+### Temporal Split
 | Split | Time Period | Size | Labels Available? |
 |-------|-------------|------|-------------------|
 | SSL Pretraining | 2012-2016 | ~40,000 | Stripped (held out for analysis) |
@@ -109,17 +150,55 @@ If the hypothesis holds, the encoder should capture:
 | Validation | 2017 (remainder) | ~5,000 | Yes |
 | Test | 2018 | ~5,000 | Yes (for final evaluation) |
 
-This temporal design simulates realistic deployment: representations are learned on historical applications, then adapted to recent labeled data and evaluated on future applications.
-
 ### Features
 | Category | Features |
 |----------|----------|
 | Continuous | Loan amount, annual income, debt-to-income ratio, revolving utilization, credit history length, number of open accounts, months since last delinquency, inquiries (6 months), revolving balance |
 | Categorical | Homeownership, employment length bucket, loan purpose, verification status, grade (A-G) |
-| Derived | Income per account, revolving balance per account, loan-to-income ratio |
+| Derived | Loan-to-income ratio, payment-to-income ratio, credit age, revolving utilization ratio, total credit lines, delinquency score, credit diversity, utilization pressure |
 
 ### Target Variable
 Binary: 90+ days delinquent or charged off within 24 months of origination.
+
+---
+
+## Baseline Models Tested
+
+This project compares SSL against three supervised baselines:
+
+### Baseline 1: Logistic Regression (LR)
+**Method:** L2-regularized logistic regression on standardized features with balanced class weights.
+
+**Strengths:** Fast training, low variance, interpretable, strong when linear assumptions hold.
+**Weaknesses:** Cannot capture feature interactions, degrades with very small samples.
+
+**Implementation:** `sklearn.linear_model.LogisticRegression` with `C=1.0`, `class_weight='balanced'`, `max_iter=1000`.
+
+**Performance at N=50 (Advanced Plan 1):** **0.5768 AUC** — This is the baseline that SSL consistently failed to beat.
+
+---
+
+### Baseline 2: LightGBM (LGBM)
+**Method:** Gradient-boosted trees with default hyperparameters and early stopping.
+
+**Strengths:** Handles mixed data types natively, captures non-linear interactions, robust to irrelevant features.
+**Weaknesses:** Requires more labeled data than linear models, prone to overfitting with very few labels.
+
+**Implementation:** `lightgbm.LGBMClassifier` with `n_estimators=100`, `max_depth=6`, `learning_rate=0.1`, `class_weight='balanced'`.
+
+**Performance at N=50 (Advanced Plan 1):** **0.5506 AUC**
+
+---
+
+### Baseline 3: PCA + Logistic Regression
+**Method:** Principal Component Analysis on unlabeled applications (retain 95% variance) → logistic regression on PCA-transformed features.
+
+**Strengths:** Leverages unlabeled data, reduces dimensionality (helps few-shot regime), computationally trivial.
+**Weaknesses:** PCA finds variance-maximizing directions, not risk-discriminating directions; linear transformation only.
+
+**Implementation:** `sklearn.decomposition.PCA(n_components=0.95)` → `LogisticRegression` on PCA features.
+
+**Performance at N=50 (Advanced Plan 1):** **0.5821 AUC**
 
 ---
 
@@ -127,19 +206,15 @@ Binary: 90+ days delinquent or charged off within 24 months of origination.
 
 ### Phase 1: Self-Supervised Pretraining
 
-**Method:** SimCLR-style contrastive learning adapted for mixed-type tabular data.
+**Methods Tested:**
+- **SimCLR:** Contrastive learning with NT-Xent loss
+- **VICReg:** Variance-Invariance-Covariance regularization
 
-**Augmentation Strategy (Core Design Decision):**
-- **Continuous features:** Gaussian noise proportional to measurement error estimates
-- **Ordinal features:** Small shifts along ordinal scale (e.g., employment length ±1 category)
-- **Categorical features:** Replacement within semantic groups (homeownership types, loan purpose categories)
-- **Feature masking:** Random 20% dropout to force inference from context
+**Augmentation Strategies:**
+- **Gaussian Noise + Masking:** Noise applied to continuous features, random feature dropout
+- **SCARF:** Random feature corruption with values from other samples
 
-**Encoder Architecture:** 2-3 layer MLP → 64-dimensional embedding with L2 normalization.
-
-**Loss:** NT-Xent (normalized temperature-scaled cross-entropy) with temperature 0.1.
-
-**Monitoring:** Contrastive loss, embedding variance (collapse detection), t-SNE visualization colored by held-out credit grade.
+**Encoder Architecture:** 3-layer MLP with BatchNorm → 128-dimensional embedding
 
 ### Phase 2: Few-Shot Evaluation
 
@@ -147,89 +222,68 @@ Binary: 90+ days delinquent or charged off within 24 months of origination.
 1. Freeze pretrained encoder
 2. Train linear classifier (logistic regression) on frozen embeddings using N labeled examples
 3. Vary N ∈ {20, 50, 100, 200} defaults (balanced with non-defaults)
-4. Repeat with 10 random seeds at each N to measure variance
-5. Report mean ± std AUC and F1 on held-out 2018 test set
+4. Repeat with 5 random seeds at each N to measure variance
+5. Report mean ± std AUC on held-out test set
 
 **Comparison:** All baselines receive identical labeled subsets. This ensures fair comparison—no method sees more labels than another.
 
-### Ablation Studies
+### Feature Engineering Plans
 
-1. **Augmentation sensitivity:** Vary noise level, masking probability, categorical swap rate
-2. **Method comparison:** Contrastive vs. masked feature prediction (denoising autoencoder)
-3. **Architecture sensitivity:** Embedding dimensions {32, 64, 128}
-4. **PCA baseline strength:** How much does the PCA baseline improve with component count?
-
----
-
-## Baseline Solutions
-
-### Baseline 1: Supervised Logistic Regression on Raw Features
-
-**Method:** L2-regularized logistic regression on standardized features.
-
-**Why This Baseline:** Represents the simplest reasonable model. If SSL cannot beat linear classification on raw features, the pretraining adds no value.
-
-**Expected Behavior:**
-- **Strengths:** Fast training, low variance, interpretable, strong when linear assumptions hold
-- **Weaknesses:** Cannot capture feature interactions, degrades with very small samples, no unlabeled data utilization
-
-**Implementation:** `sklearn.linear_model.LogisticRegression` with `C` selected via cross-validation.
+| Plan | Description | Features |
+|------|-------------|----------|
+| **Baseline Plan 1** | 18 base + 5 ratio features | 23 features |
+| **Baseline Plan 2** | 18 base + 10 raw features | 28 features |
+| **Advanced Plan 1** | 18 base + 5 ratios + 10 raw + 7 risk scores | 39 features |
 
 ---
 
-### Baseline 2: Gradient-Boosted Trees on Raw Features
+## Results
 
-**Method:** LightGBM classifier with default hyperparameters and early stopping.
+### Summary of All Experiments
 
-**Why This Baseline:** Represents the dominant supervised approach for tabular data in practice. This is the strongest supervised baseline and the one SSL must convincingly outperform.
+| Experiment | Feature Set | Augmentation | SSL Method | SSL AUC (N=50) | LR Baseline (N=50) | Improvement |
+|------------|-------------|--------------|------------|----------------|---------------------|--------------|
+| Exp 1 | Baseline Plan 2 (28 features) | Gaussian + Mask | SimCLR | 0.5491 | 0.5768 | -0.0277 |
+| Exp 2 | Advanced Plan 1 (39 features) | Gaussian + Mask | SimCLR | 0.5420 | 0.5768 | -0.0349 |
+| Exp 3 | Advanced Plan 1 (39 features) | SCARF | SimCLR | 0.5392 | 0.5768 | -0.0376 |
+| Exp 4 | Advanced Plan 1 (39 features) | SCARF | VICReg | 0.5179 | 0.5768 | -0.0590 |
 
-**Expected Behavior:**
-- **Strengths:** Handles mixed data types natively, captures non-linear interactions, robust to irrelevant features
-- **Weaknesses:** Requires more labeled data than linear models, prone to overfitting with very few labels, no unlabeled data mechanism
+### Baseline Performance (Advanced Plan 1, N=50)
 
-**Implementation:** `lightgbm.LGBMClassifier` with 100 trees, max depth 6, learning rate 0.1, early stopping on 20% validation split.
+| Model | AUC |
+|-------|-----|
+| **Logistic Regression (LR)** | **0.5768** |
+| PCA + LR | 0.5821 |
+| LightGBM | 0.5506 |
 
----
+### Key Findings
 
-### Baseline 3: PCA + Supervised Classifier
+1. **SSL consistently underperforms baseline LR** across all feature sets, augmentations, and SSL methods tested.
 
-**Method:** Principal Component Analysis on 40,000 unlabeled applications → retain components explaining 95% variance → train logistic regression and LightGBM on PCA-transformed features.
+2. **The gap widens as labeled data increases** — SSL is worse at N=50 (-0.0277) than at N=20 (-0.0002).
 
-**Why This Baseline:** This is the most direct comparison to SSL pretraining. Both methods use unlabeled data to learn a transformation. If PCA + supervised performs comparably to SSL + supervised, then linear dimensionality reduction is sufficient and contrastive learning is unnecessary.
+3. **VICReg performed worst** among all SSL methods tested (0.5179 AUC at N=50).
 
-**Expected Behavior:**
-- **Strengths:** Leverages unlabeled data, reduces dimensionality (helps few-shot regime), computationally trivial
-- **Weaknesses:** PCA finds variance-maximizing directions, not risk-discriminating directions; linear transformation only; high-variance features (income scale) may dominate
+4. **SCARF augmentation did not improve SSL performance** over Gaussian noise + masking.
 
-**Implementation:** `sklearn.decomposition.PCA` on unlabeled set → `LogisticRegression` and `LGBMClassifier` on PCA features.
+5. **Embeddings are linear** — MLP probe did not outperform linear probe across any experiment.
 
----
+6. **PCA + LR performed best among baselines** (0.5821 AUC at N=50), suggesting that linear dimensionality reduction is more effective than contrastive learning for this dataset.
 
-## Success Criteria
+### Conclusion
 
-### Primary Metric
-**AUC on 2018 test set** for the SSL-pretrained linear probe compared to the best supervised baseline at each few-shot sample size.
-
-### Success Threshold
-- Statistically significant improvement (p < 0.05, paired t-test across 10 seeds) at N ≤ 100 labeled defaults
-- Minimum AUC improvement of ≥ 0.03 over the best baseline at N = 50
-
-### Secondary Metrics
-- **Few-shot learning curve:** Steeper initial slope for SSL-pretrained models indicates better sample efficiency
-- **Embedding quality:** Silhouette score of default vs. non-default clusters in embedding space (using held-out outcomes)
-- **Representation stability:** Lower variance across random seeds indicates more robust representations
+> **"Contrastive self-supervised learning on Lending Club loan data does not produce representations that improve few-shot default prediction compared to a supervised logistic regression baseline. Across all feature sets, augmentation strategies, and SSL methods tested, SSL consistently underperformed the baseline, with the gap widening as labeled data increased. The null hypothesis could not be rejected."**
 
 ---
 
-## Failure Modes and Diagnostics
+## Failure Modes Observed
 
-| Failure Mode | Detection | Potential Mitigation |
-|--------------|-----------|---------------------|
-| Augmentation destroys risk signal | SSL linear probe worse than raw logistic regression | Reduce augmentation strength, test alternative augmentations |
-| Representation collapse | Near-zero embedding variance, uniform embeddings | Add redundancy reduction, switch to non-contrastive method |
-| Approval bias dominates representations | Embeddings predict loan grade better than default risk | Acknowledge limitation; test on less policy-influenced features |
-| Temporal degradation | Large validation-test performance gap | Investigate temporal feature shifts, reduce temporal gap |
-| No improvement over PCA baseline | PCA + supervised ≈ SSL + supervised | Conclude linear structure sufficient; contrastive method unjustified |
+| Failure Mode | Detection | Observed |
+|--------------|-----------|----------|
+| Augmentation destroys risk signal | SSL linear probe worse than raw LR | ✅ All experiments |
+| Representation collapse | Near-zero embedding variance | ❌ Variance healthy (0.45-0.65) |
+| Embeddings are linear | MLP probe ≈ Linear probe | ✅ All experiments |
+| No improvement over PCA baseline | SSL ≈ PCA + LR | ✅ All experiments |
 
 ---
 
@@ -243,10 +297,9 @@ Binary: 90+ days delinquent or charged off within 24 months of origination.
 | Component | Estimated Time |
 |-----------|---------------|
 | Data preprocessing | 5-10 minutes |
-| SSL pretraining (200 epochs, 40k samples) | 1-3 hours |
-| Baseline training (all baselines) | 10-30 minutes |
-| Few-shot experiments (10 seeds × 4 sample sizes × all methods) | 30-60 minutes |
-| Ablation studies | 1-2 hours |
+| SSL pretraining (20 epochs, 200k samples) | 2-4 hours |
+| Baseline comparison (all feature sets) | 10-30 minutes |
+| Few-shot evaluation (5 seeds × 4 sizes) | 30-60 minutes |
 | **Total (full experiment suite)** | **4-8 hours** |
 
 ### Storage
@@ -279,30 +332,20 @@ pip install -r requirements.txt
 
 ```bash
 # Download and preprocess data
-python data/download_data.py
-python data/preprocess.py
+python src/data_ingest.py
+python src/baseline_features.py
 
-# Run baseline experiments
-python experiments/run_all_experiments.py --mode baselines
+# Run baseline comparison across all feature sets
+python src/run_baselines.py
 
-# Run SSL pretraining + few-shot evaluation
-python experiments/run_all_experiments.py --mode full
+# Run SSL pretraining on best feature set
+python src/ssl/contrastive_pretraining.py
 
-# Generate results and visualizations
-python evaluation/visualize.py
-```
+# Evaluate SSL few-shot performance
+python src/ssl/few_shot_evaluation.py
 
-### Dependencies
-
-```
-torch>=1.9.0
-scikit-learn>=1.0.0
-lightgbm>=3.3.0
-pandas>=1.3.0
-numpy>=1.21.0
-matplotlib>=3.4.0
-seaborn>=0.11.0
-umap-learn>=0.5.0
+# Generate embedding visualizations
+python src/visualizations/embedding_visualizations.py
 ```
 
 ---
@@ -311,17 +354,17 @@ umap-learn>=0.5.0
 
 ### What Would Be Convincing Evidence?
 
-**Strong positive result:** SSL-pretrained linear probe achieves AUC ≥ 0.03 higher than the best supervised baseline at N=50 labeled defaults, with the gap narrowing but persisting at larger N. This suggests the representation captures generalizable risk structure.
+**Strong positive result:** SSL-pretrained linear probe achieves AUC ≥ 0.03 higher than the best supervised baseline at N=50 labeled defaults.
 
-**Moderate positive result:** SSL outperforms baselines at very small N (20-50) but the gap closes by N=200. This suggests pretraining is valuable only in extreme label scarcity.
+**Moderate positive result:** SSL outperforms baselines at very small N (20-50) but the gap closes by N=200.
 
-**Negative result:** No statistically significant improvement over PCA + supervised baselines. This suggests that the risk-relevant structure in the data is linear and PCA suffices, or that contrastive augmentations are not well-suited to credit data.
+**Negative result:** No statistically significant improvement over PCA + supervised baselines. (✅ This project)
 
-**Concerning result:** SSL underperforms raw-feature supervised models. This suggests augmentations destroyed useful signal or the pretraining objective learned misleading structure.
+**Concerning result:** SSL underperforms raw-feature supervised models. (✅ This project)
 
 ### All Results Are Informative
 
-This project is designed as an investigation, not a demonstration. A negative result that is well-documented and analyzed (showing what was learned, why it failed, what diagnostics revealed) demonstrates stronger ML thinking than a positive result achieved through overfitting or cherry-picking.
+This project is designed as an investigation, not a demonstration. A negative result that is well-documented and analyzed demonstrates stronger ML thinking than a positive result achieved through overfitting or cherry-picking.
 
 ---
 
@@ -332,18 +375,18 @@ This project is designed as an investigation, not a demonstration. A negative re
 - Test specific augmentation strategies for tabular credit data
 - Compare SSL against meaningful baselines in controlled experiments
 - Produce learning curves that quantify sample efficiency gains
+- **Provide a well-documented negative result** for the research community
 
 ### This Project Does NOT:
 - Build a production underwriting system
 - Address fair lending compliance or demographic bias
 - Generalize across multiple datasets or economic conditions
 - Claim state-of-the-art performance on credit default prediction
-- Handle the full complexity of real-world credit decisioning (interactive features, time-varying attributes, multi-product relationships)
 
 ### Known Limitations
 - **Single dataset:** Findings may not generalize to other credit products or markets
 - **Historical data:** Relationships learned may change in different economic regimes
-- **Feature completeness:** Real underwriting uses additional data sources (bureau data, alternative data) not available in Lending Club
+- **Feature completeness:** Real underwriting uses additional data sources not available in Lending Club
 - **Selection bias unresolved:** The project cannot fully separate risk from policy without rejected application outcomes
 
 ---
@@ -352,13 +395,11 @@ This project is designed as an investigation, not a demonstration. A negative re
 
 ### Core Methods
 - Chen, T., et al. "A Simple Framework for Contrastive Learning of Visual Representations." ICML 2020. (SimCLR)
-- Chen, X., & He, K. "Exploring Simple Siamese Representation Learning." CVPR 2021. (SimSiam)
-- Bahri, D., et al. "SCARF: Self-Supervised Contrastive Learning using Random Feature Corruption." ICLR 2022. (Contrastive learning for tabular data)
-- Yoon, J., et al. "VIME: Extending the Success of Self- and Semi-supervised Learning to Tabular Domain." NeurIPS 2020.
+- Bardes, A., et al. "VICReg: Variance-Invariance-Covariance Regularization for Self-Supervised Learning." ICLR 2022. (VICReg)
+- Bahri, D., et al. "SCARF: Self-Supervised Contrastive Learning using Random Feature Corruption." ICLR 2022. (SCARF)
 
 ### Credit Risk Context
 - Lessmann, S., et al. "Benchmarking state-of-the-art classification algorithms for credit scoring." European Journal of Operational Research, 2015.
-- Thomas, L.C., et al. "Credit Scoring and Its Applications." SIAM, 2017.
 
 ### Evaluation Methodology
 - Khosla, P., et al. "Supervised Contrastive Learning." NeurIPS 2020.
@@ -375,4 +416,4 @@ This project is for educational and portfolio demonstration purposes. The Lendin
 
 Ken Ira Lacson — keniralacson@gmail.com — kira-ml
 
-*This project was developed as a portfolio demonstration of applied machine learning research thinking, experimental design, and self-supervised representation learning for structured data.*
+*This project was developed as a portfolio demonstration of applied machine learning research thinking, experimental design, and self-supervised representation learning for structured data. While the null hypothesis was not rejected, the systematic investigation and documentation of this negative result contributes valuable evidence to the understanding of SSL's limitations in credit risk.*
