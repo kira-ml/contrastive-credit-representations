@@ -13,11 +13,14 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional, Tuple
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from augmentations.scarf import SCARFAugmentation
+from losses.vicreg import VICRegLoss
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -29,18 +32,18 @@ warnings.filterwarnings('ignore')
 class SSLConfig:
     """Configuration for SSL pretraining"""
     # Data
-    data_path: str = "D:/contrastive-credit-representations/data/processed/baseline_features_v2.npz"
+    data_path: str = "D:/contrastive-credit-representations/data/processed/advanced_plan1.parquet"  # Winner dataset
     n_samples: int = 200000  # Use subset for pretraining
     batch_size: int = 512
     
     # Model architecture
-    input_dim: int = 18  # Will be auto-detected
+    input_dim: int = 27  # Will be auto-detected (Plan 2 has 27 features)
     hidden_dim: int = 256
     embedding_dim: int = 128
     projection_dim: int = 64  # For contrastive head
     
     # Training hyperparameters
-    temperature: float = 0.1
+    
     learning_rate: float = 1e-3
     weight_decay: float = 1e-5
     epochs: int = 20
@@ -96,7 +99,7 @@ def setup_logging(config: SSLConfig) -> logging.Logger:
     return logger
 
 # =============================================
-# Data Loading
+# Data Loading (Parquet Version)
 # =============================================
 
 class CreditDataset(Dataset):
@@ -130,7 +133,7 @@ class CreditDataset(Dataset):
 
 def load_data(data_path: str, logger: logging.Logger, n_samples: Optional[int] = None) -> Tuple[np.ndarray, int]:
     """
-    Load preprocessed features from .npz file
+    Load preprocessed features from Parquet file
     
     Returns:
         X: Feature matrix
@@ -139,71 +142,72 @@ def load_data(data_path: str, logger: logging.Logger, n_samples: Optional[int] =
     if not Path(data_path).exists():
         raise FileNotFoundError(f"Data file not found: {data_path}")
     
-    data = np.load(data_path, allow_pickle=True)
-    X_cont = data['X_continuous']
-    X_cat = data['X_categorical']
+    # Load Parquet
+    df = pd.read_parquet(data_path)
     
-    # Combine continuous and categorical features
-    X = np.hstack([X_cont, X_cat])
-
+    # Separate features and target (target not needed for SSL pretraining)
+    X = df.drop('target', axis=1).values
+    logger.info(f"Loaded {len(X)} samples with {X.shape[1]} features")
+    
     if np.isnan(X).any():
-        logger.warning("NaN values detected in input data!")
+        logger.warning("NaN values detected in input data! This should not happen with Parquet files.")
         X = np.nan_to_num(X, nan=0.0)
     
     if n_samples and n_samples < len(X):
         np.random.seed(42)
         idx = np.random.choice(len(X), n_samples, replace=False)
         X = X[idx]
+        logger.info(f"Subsampled to {len(X)} samples")
     
     return X, X.shape[1]
 
 # =============================================
 # Augmentation for Tabular Data
 # =============================================
+# =============================================
+# SCARF Augmentation for Tabular Data
+# =============================================
 
-class TabularAugmentation:
-    """Production-grade tabular data augmentations"""
+class SCARFAugmentation:
+    """
+    SCARF augmentation for tabular data.
+    For each sample, randomly selects a subset of features and replaces them
+    with values from another random sample in the batch.
+    """
     
-    def __init__(self, noise_std: float = 0.1, mask_prob: float = 0.2, 
-                 feature_dropout: float = 0.1):
-        self.noise_std = noise_std
-        self.mask_prob = mask_prob
-        self.feature_dropout = feature_dropout
+    def __init__(self, corruption_rate: float = 0.3):
+        """
+        Args:
+            corruption_rate: Fraction of features to corrupt (0.0 to 1.0)
+        """
+        self.corruption_rate = corruption_rate
     
     def __call__(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Create two augmented views of the input
+        Create two augmented views using SCARF.
         
         Args:
-            x: Input tensor (batch_size, n_features)
-        
+            x: Input tensor of shape (batch_size, n_features)
+            
         Returns:
-            x1, x2: Augmented views
+            x1, x2: Two augmented views with corrupted features
         """
-        # Initialize both views
+        batch_size, n_features = x.shape
+        n_corrupt = int(n_features * self.corruption_rate)
+        
         x1 = x.clone()
         x2 = x.clone()
         
-        # 1. Gaussian noise augmentation
-        noise1 = torch.randn_like(x1) * self.noise_std
-        noise2 = torch.randn_like(x2) * self.noise_std
-        x1 = x1 + noise1
-        x2 = x2 + noise2
-        
-        # 2. Feature masking (random dropout of features)
-        mask1 = torch.rand_like(x1) > self.mask_prob
-        mask2 = torch.rand_like(x2) > self.mask_prob
-        x1 = x1 * mask1
-        x2 = x2 * mask2
-        
-        # 3. Feature dropout (randomly zero out entire columns)
-        if self.feature_dropout > 0:
-            dropout_mask1 = torch.rand(x1.shape[1]) > self.feature_dropout
-            dropout_mask2 = torch.rand(x2.shape[1]) > self.feature_dropout
-            x1 = x1 * dropout_mask1.unsqueeze(0)
-            x2 = x2 * dropout_mask2.unsqueeze(0)
+        # For each view, select random features and replace with values from random samples
+        for view in [x1, x2]:
+            corrupt_indices = torch.randperm(n_features)[:n_corrupt]
+            for feat_idx in corrupt_indices:
+                view[:, feat_idx] = x[torch.randperm(batch_size), feat_idx]
         
         return x1, x2
+    
+
+
 
 # =============================================
 # Encoder Architecture
@@ -318,8 +322,6 @@ class SimCLRLoss(nn.Module):
         
         return loss
 
-
-
 # =============================================
 # Trainer
 # =============================================
@@ -358,81 +360,83 @@ class SSLTrainer:
             hidden_dim=self.config.hidden_dim,
             embedding_dim=self.config.embedding_dim
         ).to(self.device)
-        
+    
         self.projection_head = ProjectionHead(
             input_dim=self.config.embedding_dim,
             projection_dim=self.config.projection_dim
         ).to(self.device)
-        
-        self.criterion = SimCLRLoss(temperature=self.config.temperature)
-        
+    
+        # VICReg loss with tuned weights for tabular data
+        self.criterion = VICRegLoss(
+            invariance_weight=1.0,
+            variance_weight=0.5,
+            covariance_weight=0.01,
+            variance_epsilon=0.001
+        )
+    
         # Optimizer with weight decay
         self.optimizer = optim.AdamW(
             list(self.encoder.parameters()) + list(self.projection_head.parameters()),
             lr=self.config.learning_rate,
             weight_decay=self.config.weight_decay
         )
-        
+    
         # Learning rate scheduler
         self.scheduler = CosineAnnealingLR(
             self.optimizer, 
             T_max=self.config.epochs,
             eta_min=self.config.learning_rate * 0.01
         )
-        
+    
         # Log model architecture
         n_params = sum(p.numel() for p in self.encoder.parameters())
         self.logger.info(f"Encoder: {n_params:,} parameters")
         self.logger.info(f"Input dim: {input_dim} -> Hidden: {self.config.hidden_dim} -> Embedding: {self.config.embedding_dim}")
-    
+
     def train_epoch(self, dataloader: DataLoader, epoch: int) -> float:
         """Train for one epoch"""
         self.encoder.train()
         self.projection_head.train()
-        
+    
         total_loss = 0.0
         n_batches = len(dataloader)
-        
+    
         for batch_idx, batch in enumerate(dataloader):
             batch = batch.to(self.device)
-            
+        
             # Apply augmentations
-            augment = TabularAugmentation(
-                noise_std=0.1,   # Increased from 0.05
-                mask_prob=0.2,   # Increased from 0.1
-                feature_dropout=0.1   # Increased from 0.05
-            )
+            augment = SCARFAugmentation(corruption_rate=0.3)
             x1, x2 = augment(batch)
-            
+        
             # Forward pass
             z1 = self.encoder(x1)
             z2 = self.encoder(x2)
-            
-            # Projection head
+        
+            # Option 1: With projection head (recommended)
             p1 = self.projection_head(z1)
             p2 = self.projection_head(z2)
-            
-            # Compute loss
             loss = self.criterion(p1, p2)
-            
+        
+            # Option 2: Without projection head (simpler)
+            # loss = self.criterion(z1, z2)
+        
             # Backward pass
             self.optimizer.zero_grad()
             loss.backward()
-            
+        
             # Gradient clipping
             torch.nn.utils.clip_grad_norm_(
                 list(self.encoder.parameters()) + list(self.projection_head.parameters()),
                 max_norm=1.0
             )
-            
+        
             self.optimizer.step()
-            
+        
             total_loss += loss.item()
-            
-            # Log progress
+        
             if batch_idx % 10 == 0:
                 self.logger.debug(f"  Batch {batch_idx}/{n_batches}, Loss: {loss.item():.4f}")
-        
+    
         return total_loss / n_batches
     
     def validate(self, dataloader: DataLoader) -> float:
@@ -524,7 +528,6 @@ class SSLTrainer:
 # =============================================
 # Main Function
 # =============================================
-
 def main():
     """Main execution function"""
     
@@ -545,7 +548,8 @@ def main():
     try:
         # Load data
         logger.info("\nLoading data...")
-        X, input_dim = load_data(config.data_path, config.n_samples)
+        # FIX: Pass logger as second argument, not config.n_samples
+        X, input_dim = load_data(config.data_path, logger, config.n_samples)
         logger.info(f"  Data shape: {X.shape}")
         logger.info(f"  Input dimension: {input_dim}")
         
@@ -590,6 +594,8 @@ def main():
     except Exception as e:
         logger.error(f"❌ Error during pretraining: {str(e)}")
         raise
+
+
 
 # =============================================
 # Entry Point

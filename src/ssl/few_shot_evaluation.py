@@ -23,10 +23,10 @@ warnings.filterwarnings('ignore')
 # Configuration
 # =============================================
 
-DATA_PATH = r"D:\contrastive-credit-representations\data\processed\baseline_features_v2.npz"
+DATA_PATH = r"D:\contrastive-credit-representations\data\processed\advanced_plan1.parquet"  # Winner dataset
 ENCODER_PATH = r"D:\contrastive-credit-representations\models\ssl_encoder.pt"
 RESULTS_DIR = r"D:\contrastive-credit-representations\results\ssl"
-N_SAMPLES = 10000  # Use same subset as pretraining
+N_SAMPLES = 10000  # Use subset for evaluation
 BATCH_SIZE = 256
 FEW_SHOT_SIZES = [20, 50, 100, 200]
 N_SEEDS = 5
@@ -34,18 +34,16 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 EMBEDDING_DIM = 128  # Must match the encoder's embedding dimension
 
 # =============================================
-# Data Loading
+# Data Loading (Parquet Version)
 # =============================================
 
 def load_data(data_path: str, n_samples: int = None) -> tuple:
-    """Load preprocessed features and labels"""
-    data = np.load(data_path, allow_pickle=True)
-    X_cont = data['X_continuous']
-    X_cat = data['X_categorical']
-    y = data['y']
+    """Load preprocessed features and labels from Parquet"""
+    df = pd.read_parquet(data_path)
     
-    # Combine continuous and categorical
-    X = np.hstack([X_cont, X_cat])
+    # Separate features and target
+    X = df.drop('target', axis=1).values
+    y = df['target'].values
     
     if n_samples and n_samples < len(X):
         np.random.seed(42)
